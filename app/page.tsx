@@ -52,7 +52,7 @@ export default function Home() {
     setSending(true);
     const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
     setSending(false);
-    setAuthNotice(error ? error.message : "Verification link sent. Check your USC inbox, then return here to continue.");
+    setAuthNotice(error ? error.message : "Verification link sent. Check your USC inbox and open the link to return here.");
   };
 
   const saveProfile = async () => {
