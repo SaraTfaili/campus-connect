@@ -1,7 +1,7 @@
 "use client";
 
 import { BadgeCheck, GraduationCap, LockKeyhole, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 type Visibility = "email" | "phone" | "academic" | "linkedin";
@@ -18,20 +18,70 @@ export default function Home() {
   const [finished, setFinished] = useState(false);
   const [authNotice, setAuthNotice] = useState("");
   const [sending, setSending] = useState(false);
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileNotice, setProfileNotice] = useState("");
   const emailIsUSC = email.trim().toLowerCase().endsWith("@usc.edu");
-  const sendVerification = async () => {
-    if (!emailIsUSC) return;
+  const supabase = useMemo(() => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) {
+    return url && key ? createClient(url, key) : null;
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const useSession = (session: { user: { id: string; email?: string | null } } | null) => {
+      const verifiedEmail = session?.user.email?.toLowerCase();
+      if (!session || !verifiedEmail?.endsWith("@usc.edu")) return;
+      setAuthUserId(session.user.id);
+      setEmail(verifiedEmail);
+      setStep((currentStep) => Math.max(currentStep, 2));
+      setAuthNotice("");
+    };
+    supabase.auth.getSession().then(({ data }) => useSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => useSession(session));
+    return () => listener.subscription.unsubscribe();
+  }, [supabase]);
+
+  const sendVerification = async () => {
+    if (!emailIsUSC) return;
+    if (!supabase) {
       setAuthNotice("Add your Supabase URL and anonymous key to activate USC email verification.");
       return;
     }
     setSending(true);
-    const supabase = createClient(url, key);
     const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
     setSending(false);
     setAuthNotice(error ? error.message : "Verification link sent. Check your USC inbox, then return here to continue.");
+  };
+
+  const saveProfile = async () => {
+    if (!supabase || !authUserId) {
+      setProfileNotice("Please verify your USC email before saving your profile.");
+      return;
+    }
+    setSavingProfile(true);
+    setProfileNotice("");
+    const { error } = await supabase.from("profiles").upsert({
+      id: authUserId,
+      usc_email: email.trim().toLowerCase(),
+      full_name: name.trim(),
+      major: major.trim(),
+      graduation_year: Number(year),
+      show_usc_email: privacy.email,
+      show_phone: privacy.phone,
+      show_academic_details: privacy.academic,
+      show_linkedin: privacy.linkedin,
+      notify_membership_requests: alerts.requests,
+      notify_updates_events: alerts.updates,
+      notify_messages: alerts.messages,
+    }, { onConflict: "id" });
+    setSavingProfile(false);
+    if (error) {
+      setProfileNotice(error.message);
+      return;
+    }
+    setFinished(true);
   };
 
   return <main className="min-h-screen bg-[#f7f8fc] text-[#15213b]">
@@ -41,7 +91,7 @@ export default function Home() {
       <section className="rounded-3xl border border-[#e3e7f0] bg-white p-7 shadow-sm sm:p-10">
         {step === 1 && <div className="max-w-xl"><span className="inline-flex items-center gap-2 rounded-full bg-[#eef0ff] px-3 py-1 text-xs font-bold text-[#6255c9]"><ShieldCheck className="h-4 w-4" />USC only</span><h2 className="mt-5 text-3xl font-semibold tracking-tight">Verify your USC email</h2><p className="mt-3 leading-7 text-[#68758d]">Use your <strong>@usc.edu</strong> address. You will receive a confirmation link before your account becomes active.</p><label className="mt-8 block text-sm font-semibold">USC email address<input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@usc.edu" className="mt-2 block w-full rounded-xl border border-[#d7ddea] px-4 py-3 text-base outline-none ring-[#7667e8] transition focus:ring-2" /></label>{email && !emailIsUSC && <p className="mt-2 text-sm text-[#b34d62]">Please enter a valid USC email ending in @usc.edu.</p>}<button onClick={sendVerification} disabled={!emailIsUSC || sending} className="mt-7 rounded-xl bg-[#7667e8] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#6658d7] disabled:cursor-not-allowed disabled:opacity-45">{sending ? "Sending..." : "Send verification link"}</button>{authNotice && <p className="mt-3 text-sm text-[#6255c9]">{authNotice}</p>}<p className="mt-5 flex gap-2 text-sm text-[#768299]"><LockKeyhole className="mt-0.5 h-4 w-4" />Your email is only visible to members if you choose to share it.</p></div>}
         {step === 2 && <div className="max-w-xl"><span className="inline-flex items-center gap-2 rounded-full bg-[#edf9f3] px-3 py-1 text-xs font-bold text-[#287454]"><BadgeCheck className="h-4 w-4" />USC email verified</span><h2 className="mt-5 text-3xl font-semibold tracking-tight">Build your profile</h2><p className="mt-3 leading-7 text-[#68758d]">These details help approved club members understand who they are connecting with.</p><div className="mt-7 grid gap-5 sm:grid-cols-2"><label className="text-sm font-semibold sm:col-span-2">Full name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" className="mt-2 block w-full rounded-xl border border-[#d7ddea] px-4 py-3 outline-none focus:ring-2 focus:ring-[#7667e8]" /></label><label className="text-sm font-semibold">Major<input value={major} onChange={(event) => setMajor(event.target.value)} placeholder="Computer Science" className="mt-2 block w-full rounded-xl border border-[#d7ddea] px-4 py-3 outline-none focus:ring-2 focus:ring-[#7667e8]" /></label><label className="text-sm font-semibold">Graduation year<input value={year} onChange={(event) => setYear(event.target.value)} placeholder="2027" className="mt-2 block w-full rounded-xl border border-[#d7ddea] px-4 py-3 outline-none focus:ring-2 focus:ring-[#7667e8]" /></label></div><button disabled={!name || !major || !year} onClick={() => setStep(3)} className="mt-7 rounded-xl bg-[#7667e8] px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-45">Continue</button></div>}
-        {step === 3 && <div className="max-w-xl"><span className="inline-flex items-center gap-2 rounded-full bg-[#eef0ff] px-3 py-1 text-xs font-bold text-[#6255c9]"><GraduationCap className="h-4 w-4" />Your settings</span><h2 className="mt-5 text-3xl font-semibold tracking-tight">Control your visibility</h2><p className="mt-3 leading-7 text-[#68758d]">Only approved members in a shared community can see the details you choose to share.</p><div className="mt-8 border-t border-[#e7ebf3] pt-7"><h3 className="text-base font-semibold">Directory information</h3><Toggle label="USC email" description="Lets members contact you professionally." checked={privacy.email} onChange={() => setPrivacy({ ...privacy, email: !privacy.email })} /><Toggle label="Phone number" description="Hidden by default." checked={privacy.phone} onChange={() => setPrivacy({ ...privacy, phone: !privacy.phone })} /><Toggle label="Major and graduation year" description="Helps peers find people on similar paths." checked={privacy.academic} onChange={() => setPrivacy({ ...privacy, academic: !privacy.academic })} /><Toggle label="LinkedIn" description="Optional professional profile link." checked={privacy.linkedin} onChange={() => setPrivacy({ ...privacy, linkedin: !privacy.linkedin })} /></div><div className="mt-7 border-t border-[#e7ebf3] pt-7"><h3 className="text-base font-semibold">Notifications</h3><p className="mt-1 text-sm text-[#748097]">You can update these anytime from Profile.</p><Toggle label="Community requests" description="Approvals, declines, and request updates." checked={alerts.requests} onChange={() => setAlerts({ ...alerts, requests: !alerts.requests })} /><Toggle label="Updates and events" description="Posts from communities you are approved to join." checked={alerts.updates} onChange={() => setAlerts({ ...alerts, updates: !alerts.updates })} /><Toggle label="Message requests and DMs" description="Private messages require your acceptance first." checked={alerts.messages} onChange={() => setAlerts({ ...alerts, messages: !alerts.messages })} /></div><button onClick={() => setFinished(true)} className="mt-8 rounded-xl bg-[#7667e8] px-5 py-3 text-sm font-semibold text-white">Finish setup</button>{finished && <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-[#287454]"><BadgeCheck className="h-4 w-4" />Profile saved. You can now explore official USC communities.</p>}</div>}
+        {step === 3 && <div className="max-w-xl"><span className="inline-flex items-center gap-2 rounded-full bg-[#eef0ff] px-3 py-1 text-xs font-bold text-[#6255c9]"><GraduationCap className="h-4 w-4" />Your settings</span><h2 className="mt-5 text-3xl font-semibold tracking-tight">Control your visibility</h2><p className="mt-3 leading-7 text-[#68758d]">Only approved members in a shared community can see the details you choose to share.</p><div className="mt-8 border-t border-[#e7ebf3] pt-7"><h3 className="text-base font-semibold">Directory information</h3><Toggle label="USC email" description="Lets members contact you professionally." checked={privacy.email} onChange={() => setPrivacy({ ...privacy, email: !privacy.email })} /><Toggle label="Phone number" description="Hidden by default." checked={privacy.phone} onChange={() => setPrivacy({ ...privacy, phone: !privacy.phone })} /><Toggle label="Major and graduation year" description="Helps peers find people on similar paths." checked={privacy.academic} onChange={() => setPrivacy({ ...privacy, academic: !privacy.academic })} /><Toggle label="LinkedIn" description="Optional professional profile link." checked={privacy.linkedin} onChange={() => setPrivacy({ ...privacy, linkedin: !privacy.linkedin })} /></div><div className="mt-7 border-t border-[#e7ebf3] pt-7"><h3 className="text-base font-semibold">Notifications</h3><p className="mt-1 text-sm text-[#748097]">You can update these anytime from Profile.</p><Toggle label="Community requests" description="Approvals, declines, and request updates." checked={alerts.requests} onChange={() => setAlerts({ ...alerts, requests: !alerts.requests })} /><Toggle label="Updates and events" description="Posts from communities you are approved to join." checked={alerts.updates} onChange={() => setAlerts({ ...alerts, updates: !alerts.updates })} /><Toggle label="Message requests and DMs" description="Private messages require your acceptance first." checked={alerts.messages} onChange={() => setAlerts({ ...alerts, messages: !alerts.messages })} /></div><button onClick={saveProfile} disabled={savingProfile} className="mt-8 rounded-xl bg-[#7667e8] px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{savingProfile ? "Saving..." : "Finish setup"}</button>{profileNotice && <p className="mt-4 text-sm font-medium text-[#b34d62]">{profileNotice}</p>}{finished && <p className="mt-4 flex items-center gap-2 text-sm font-semibold text-[#287454]"><BadgeCheck className="h-4 w-4" />Profile saved. You can now explore official USC communities.</p>}</div>}
       </section>
     </section>
     <footer className="px-5 pb-8 text-center text-xs text-[#8a95a8]">Campus Connect is an independent student platform and is not affiliated with USC.</footer>
